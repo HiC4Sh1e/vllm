@@ -1989,7 +1989,7 @@ class ParallelConfig:
 
 
 PreemptionMode = Literal["swap", "recompute"]
-SchedulerPolicy = Literal["fcfs", "priority"]
+SchedulerPolicy = Literal["fcfs", "priority", "sjf"]
 
 
 @config
