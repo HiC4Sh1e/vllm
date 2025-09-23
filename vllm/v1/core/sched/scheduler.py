@@ -157,7 +157,7 @@ class Scheduler(SchedulerInterface):
 
         self.peak_split = False
         if vllm_config.additional_config:
-            logger.info(f"Setting peak split param and additional config is {vllm_config.additional_config}")
+            logger.debug(f"Setting peak split param and additional config is {vllm_config.additional_config}")
             self.peak_split = vllm_config.additional_config.get("peak_split", False)
             self.peak_split_factor = vllm_config.additional_config.get("peak_split_factor", 0.5)
             self.peak_split_threshold = vllm_config.additional_config.get("peak_split_threshold", 16)
@@ -201,11 +201,11 @@ class Scheduler(SchedulerInterface):
         if self.peak_split:
             if self.peak_split_factor * (len(self.running) + len(self.waiting)) < self.peak_split_threshold:
                 self.chunked_prefill_enabled = False
-                logger.info(
+                logger.debug(
                     f"peak_split is {self.peak_split} and chunked_prefill_enabled is {self.chunked_prefill_enabled}")
             else:
                 self.chunked_prefill_enabled = True
-                logger.info(
+                logger.debug(
                     f"peak_split is {self.peak_split} and chunked_prefill_enabled is {self.chunked_prefill_enabled}")
 
         # For logging.
@@ -220,7 +220,7 @@ class Scheduler(SchedulerInterface):
                               request.num_computed_tokens)
             if (0 < 2 * self.scheduler_config.long_prefill_token_threshold <=
                     num_new_tokens and self.chunked_prefill_enabled):
-                logger.info(f"using self.chunked_prefill_enabled is {self.chunked_prefill_enabled} and current num_new_tokens is {num_new_tokens}")
+                logger.debug(f"using self.chunked_prefill_enabled is {self.chunked_prefill_enabled} and current num_new_tokens is {num_new_tokens}")
                 num_new_tokens = (
                     self.scheduler_config.long_prefill_token_threshold)
             num_new_tokens = min(num_new_tokens, token_budget)
@@ -420,7 +420,7 @@ class Scheduler(SchedulerInterface):
                     num_new_tokens = request.num_tokens - num_computed_tokens
                     if (0 < 2 * self.scheduler_config.long_prefill_token_threshold
                             <= num_new_tokens and self.chunked_prefill_enabled):
-                        logger.info(
+                        logger.debug(
                             f"using self.chunked_prefill_enabled is {self.chunked_prefill_enabled} and current num_new_tokens is {num_new_tokens}")
                         num_new_tokens = (
                             self.scheduler_config.long_prefill_token_threshold)
@@ -509,7 +509,6 @@ class Scheduler(SchedulerInterface):
         # Put back any skipped requests at the head of the waiting queue
         if skipped_waiting_requests:
             self.waiting.extendleft(skipped_waiting_requests)
-        logger.info(f"num_scheduled_tokens is {num_scheduled_tokens}")
         # Check if the scheduling constraints are satisfied.
         total_num_scheduled_tokens = sum(num_scheduled_tokens.values())
         assert total_num_scheduled_tokens <= self.max_num_scheduled_tokens
