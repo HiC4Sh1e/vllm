@@ -10,7 +10,8 @@ from collections.abc import Iterable, Iterator
 from enum import Enum
 
 from vllm.v1.request import Request
-from functools import total_ordering
+from vllm.v1.core.sched.policy.normalized_scorer import TimeAndLengthScorer
+from vllm.v1.core.sched.policy.weighted_score_softer import WeightedScore
 import time
 
 
@@ -219,13 +220,19 @@ class PriorityRequestQueue(RequestQueue):
 class SJFRequestQueue(deque[Request], RequestQueue):
     """A short-job-first queue that supports deque operations."""
 
+    def __init__(self):
+        deque.__init__(self)
+        self.scorer = TimeAndLengthScorer(
+            time_median=5, time_weight=0.5,
+            length_median=32*1024, length_weight=0.5, reverse_len=True)
+
     def add_request(self, request: Request) -> None:
-        """Add a request to the queue according to FCFS policy."""
+        """Add a request to the queue according to SJF policy."""
         self.append(request)
         self.sort_requests()
 
     def pop_request(self) -> Request:
-        """Pop a request from the queue according to FCFS policy."""
+        """Pop a request from the queue according to SJF policy."""
         return self.popleft()
 
     def peek_request(self) -> Request:
@@ -259,7 +266,7 @@ class SJFRequestQueue(deque[Request], RequestQueue):
         self.extend(filtered_requests)
 
     def sort_requests(self, reverse = False) -> None:
-        key_func = lambda req: RequestSorter(req, strategy="base_sjf")
+        key_func = lambda req: WeightedScore(self.scorer.score(time.time()-req.arrival_time, len(req.prompt_token_ids)))
         sorted_list = sorted(self, key=key_func, reverse=reverse)
         self.clear()
         self.extend(sorted_list)
@@ -273,35 +280,12 @@ class SJFRequestQueue(deque[Request], RequestQueue):
         return super().__len__()
 
     def __iter__(self) -> Iterator[Request]:
-        """Iterate over the queue according to FCFS policy."""
+        """Iterate over the queue according to SJF policy."""
         return super().__iter__()
 
     def __reversed__(self) -> Iterator[Request]:
         """Iterate over the queue in reverse order."""
         return super().__reversed__()
-
-
-@total_ordering
-class RequestSorter:
-    def __init__(self, request: Request, strategy: str = "base_sjf"):
-        self.request = request
-        self.strategy = strategy  # 排序策略
-        self.waiting_time_factor = 0.5
-        self.length_factor = 0.5
-
-    def __lt__(self, other: 'RequestSorter') -> bool:
-        if self.strategy == "base_sjf":
-            return len(self.request.prompt_token_ids) < len(other.request.prompt_token_ids)
-        elif self.strategy == "arrival_time_with_sjf":
-            now = time.time()
-            self_request_score = self.waiting_time_factor * (now - self.request.arrival_time)*1000 + self.length_factor * len(self.request.prompt_token_ids)
-            other_request_score = self.waiting_time_factor * (now - other.request.arrival_time)*1000 + self.length_factor * len(other.request.prompt_token_ids)
-            return self_request_score > other_request_score
-        else:
-            raise ValueError(f"Unsupport strategy for sorting: {self.strategy}")
-
-    def __eq__(self, other: 'RequestSorter') -> bool:
-        return self.request.request_id == other.request.request_id
 
 def create_request_queue(policy: SchedulingPolicy) -> RequestQueue:
     """Create request queue based on scheduling policy."""

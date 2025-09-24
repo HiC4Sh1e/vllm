@@ -1,8 +1,10 @@
 from typing import List
 
+from vllm.logger import init_logger
+
 import math
 
-
+logger = init_logger(__name__)
 class ScoreDim:
     """
     归一化评分维度
@@ -56,7 +58,7 @@ class NormalizedScorer:
                 score = self._inv_sigmoid_normalize(dim_value, dim_info.median, dim_info.norm_scale)
             else:
                 score = self._sigmoid_normalize(dim_value, dim_info.median, dim_info.norm_scale)
-            print(f"{dim_info.name}({dim_info.reverse}) : {score:.10f}")
+            logger.debug(f"{dim_info.name}({dim_info.reverse}) : {score:.10f}")
 
             # 加权求和
             final_score += score * dim_info.weight
