@@ -158,9 +158,8 @@ class Scheduler(SchedulerInterface):
         self.peak_split = False
         if vllm_config.additional_config:
             logger.debug(f"Setting peak split param and additional config is {vllm_config.additional_config}")
-            self.peak_split = vllm_config.additional_config.get("peak_split", False)
+            self.peak_split = vllm_config.additional_config.get("peak_split", False) if self.scheduler_config.chunked_prefill_enabled else False
             self.peak_split_factor = vllm_config.additional_config.get("peak_split_factor", 0.5)
-            self.peak_split_threshold = vllm_config.additional_config.get("peak_split_threshold", 16)
             self.chunked_prefill_enabled = self.scheduler_config.chunked_prefill_enabled
 
     def schedule(self) -> SchedulerOutput:
@@ -199,7 +198,7 @@ class Scheduler(SchedulerInterface):
 
         # peak_split
         if self.peak_split:
-            if self.peak_split_factor * (len(self.running) + len(self.waiting)) < self.peak_split_threshold:
+            if self.peak_split_factor * (len(self.running) + len(self.waiting)) < self.max_num_running_reqs:
                 self.chunked_prefill_enabled = False
                 logger.debug(
                     f"peak_split is {self.peak_split} and chunked_prefill_enabled is {self.chunked_prefill_enabled}")
