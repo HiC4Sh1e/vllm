@@ -1,18 +1,26 @@
 from functools import total_ordering
 
+from vllm.v1.core.sched.policy.normalized_scorer import TimeAndLengthScorer
+import time
+
+TimeAndLengthScorer_Instance = None
+
+if TimeAndLengthScorer_Instance == None:
+    TimeAndLengthScorer_Instance = TimeAndLengthScorer(time_median=5, time_weight=0.5, length_median=32 * 1024,
+                                                       length_weight=0.5, reverse_len=True)
 @total_ordering
 class WeightedScore:
-    def __init__(self, score: float, strategy: str = "arrival_time_with_sjf"):
-        self.score = score
-        self.strategy = strategy
+    def __init__(self, request_length: int, request_arrival_time: float, request_slo_requirement: list = None):
+        self.request_length = request_length
+        self.request_arrival_time = request_arrival_time
+        self.request_slo_requirement = request_slo_requirement
+        self.wait_time = 0
+        self.weighted_score = 0
 
     def __lt__(self, other_request_weighted_score: 'WeightedScore') -> bool:
-        if self.strategy == "base_sjf":
-            return self.score < other_request_weighted_score.score
-        elif self.strategy == "arrival_time_with_sjf":
-            return self.score > other_request_weighted_score.score
-        else:
-            raise ValueError(f"Unsupported strategy for sorting: {self.strategy}")
+        self.wait_time = time.time() - self.request_arrival_time
+        self.weighted_score = TimeAndLengthScorer_Instance.score(self.wait_time, self.request_length)
+        return self.weighted_score > other_request_weighted_score.weighted_score
 
     def __eq__(self, other_request_weighted_score: 'WeightedScore') -> bool:
-        return self.score == other_request_weighted_score.score
+        return self.weighted_score == other_request_weighted_score.weighted_score
