@@ -223,7 +223,7 @@ class SJFRequestQueue(deque[Request], RequestQueue):
     def add_request(self, request: Request) -> None:
         """Add a request to the queue according to SJF policy."""
         self.append(request)
-        self.sort_requests()
+        self._sort_requests()
 
     def pop_request(self) -> Request:
         """Pop a request from the queue according to SJF policy."""
@@ -233,6 +233,7 @@ class SJFRequestQueue(deque[Request], RequestQueue):
         """Peek at the next request in the queue without removing it."""
         if not self:
             raise IndexError("peek from an empty queue")
+        self._sort_requests()
         return self[0]
 
     def prepend_request(self, request: Request) -> None:
@@ -259,7 +260,7 @@ class SJFRequestQueue(deque[Request], RequestQueue):
         self.clear()
         self.extend(filtered_requests)
 
-    def sort_requests(self, reverse = False) -> None:
+    def _sort_requests(self, reverse = False) -> None:
         key_func = lambda req: WeightedScore(request_length=len(req.prompt_token_ids), request_arrival_time=req.arrival_time)
         sorted_list = sorted(self, key=key_func, reverse=reverse)
         self.clear()

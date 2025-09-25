@@ -357,9 +357,6 @@ class Scheduler(SchedulerInterface):
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
-            if self.scheduler_config.policy == "sjf":
-                self.waiting.sort_requests()
-
             while self.waiting and token_budget > 0:
                 if len(self.running) == self.max_num_running_reqs:
                     break

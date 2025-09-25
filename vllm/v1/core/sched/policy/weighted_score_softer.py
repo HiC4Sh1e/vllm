@@ -14,13 +14,15 @@ class WeightedScore:
         self.request_length = request_length
         self.request_arrival_time = request_arrival_time
         self.request_slo_requirement = request_slo_requirement
-        self.wait_time = 0
-        self.weighted_score = 0
+        self.__update_stats()
 
     def __lt__(self, other_request_weighted_score: 'WeightedScore') -> bool:
-        self.wait_time = time.time() - self.request_arrival_time
-        self.weighted_score = TimeAndLengthScorer_Instance.score(self.wait_time, self.request_length)
+        self.__update_stats()
         return self.weighted_score > other_request_weighted_score.weighted_score
 
     def __eq__(self, other_request_weighted_score: 'WeightedScore') -> bool:
         return self.weighted_score == other_request_weighted_score.weighted_score
+
+    def __update_stats(self):
+        self.wait_time = time.time() - self.request_arrival_time
+        self.weighted_score = TimeAndLengthScorer_Instance.score(self.wait_time, self.request_length)
