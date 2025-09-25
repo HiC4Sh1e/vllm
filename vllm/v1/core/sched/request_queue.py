@@ -302,14 +302,14 @@ class SJFRequestQueueInHeap(RequestQueue):
         """Pop a request from the queue according to SJF policy."""
         if not self._heap:
             raise IndexError("pop from empty heap")
-        _, _, request = heapq.heappop(self._heap)
+        _, request = heapq.heappop(self._heap)
         return request
 
     def peek_request(self) -> Request:
         """Peek at the next request in the queue without removing it."""
         if not self._heap:
             raise IndexError("peek from empty heap")
-        _, _, request = self._heap[0]
+        _, request = self._heap[0]
         return request
 
     def prepend_request(self, request: Request) -> None:
@@ -329,13 +329,13 @@ class SJFRequestQueueInHeap(RequestQueue):
 
     def remove_request(self, request: Request) -> None:
         """Remove a specific request from the queue."""
-        self._heap = [(p, t, r) for p, t, r in self._heap if r != request]
+        self._heap = [(ws, r) for ws, r in self._heap if r != request]
         heapq.heapify(self._heap)
 
     def remove_requests(self, requests: Iterable[Request]) -> None:
         """Remove multiple specific requests from the queue."""
         requests_to_remove = set(requests)
-        self._heap = [(p, t, r) for p, t, r in self._heap
+        self._heap = [(ws, r) for ws , r in self._heap
                       if r not in requests_to_remove]
         heapq.heapify(self._heap)
 
