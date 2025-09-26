@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator
 from enum import Enum
 
 from vllm.v1.request import Request
-from vllm.v1.core.sched.policy.weighted_score_softer import WeightedScore
+from vllm.v1.core.sched.policy.weighted_score_softer import WeightedScoreSorter
 
 class SchedulingPolicy(Enum):
     """Enum for scheduling policies."""
@@ -261,7 +261,7 @@ class SJFRequestQueue(deque[Request], RequestQueue):
         self.extend(filtered_requests)
 
     def _sort_requests(self, reverse = False) -> None:
-        key_func = lambda req: WeightedScore(request_length=len(req.prompt_token_ids), request_arrival_time=req.arrival_time)
+        key_func = lambda req: WeightedScoreSorter(request_length=len(req.prompt_token_ids), request_arrival_time=req.arrival_time)
         sorted_list = sorted(self, key=key_func, reverse=reverse)
         self.clear()
         self.extend(sorted_list)
@@ -291,12 +291,12 @@ class SJFRequestQueueInHeap(RequestQueue):
     """
 
     def __init__(self) -> None:
-        self._heap: list[tuple[WeightedScore, Request]] = []
+        self._heap: list[tuple[WeightedScoreSorter, Request]] = []
 
     def add_request(self, request: Request) -> None:
         """Add a request to the queue according to SJF policy."""
         heapq.heappush(self._heap,
-                       (WeightedScore(len(request.prompt_token_ids), request.arrival_time), request))
+                       (WeightedScoreSorter(len(request.prompt_token_ids), request.arrival_time), request))
 
     def pop_request(self) -> Request:
         """Pop a request from the queue according to SJF policy."""
