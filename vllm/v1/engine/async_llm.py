@@ -39,7 +39,8 @@ from vllm.v1.metrics.loggers import (StatLoggerBase, StatLoggerFactory,
                                      setup_default_loggers)
 from vllm.v1.metrics.prometheus import shutdown_prometheus
 from vllm.v1.metrics.stats import IterationStats, SchedulerStats
-
+from vllm.v1.core.sched.policy.buffer_response_processor import (BufferResponseProcessor, vllm_process_callback,
+                                                                 BufferedResponse, bind_fixed_params)
 logger = init_logger(__name__)
 
 
@@ -131,6 +132,18 @@ class AsyncLLM(EngineClient):
         if self.stat_loggers:
             for stat_logger in self.stat_loggers[0]:
                 stat_logger.log_engine_initialized()
+
+        self.buffer_response = False
+        if vllm_config.additional_config:
+            logger.debug(f"Setting buffer_response and additional config is {vllm_config.additional_config}")
+            self.buffer_response = vllm_config.additional_config.get("buffer_response", False)
+            if self.buffer_response:
+                async_llm_engine_core = self.engine_core
+                decorated_vllm_process_callback = bind_fixed_params(loop=asyncio.get_event_loop(), engine_core=async_llm_engine_core)(
+                    vllm_process_callback)
+                self.buffer_response_processor = BufferResponseProcessor(decorated_vllm_process_callback,
+                                                                         vllm_config.parallel_config.data_parallel_size)
+
         self.output_handler: Optional[asyncio.Task] = None
         try:
             # Start output handler eagerly if we are in the asyncio eventloop.
@@ -210,6 +223,9 @@ class AsyncLLM(EngineClient):
         if handler := getattr(self, "output_handler", None):
             handler.cancel()
 
+        if buffer_response_processor := getattr(self, "buffer_response_processor", None):
+            buffer_response_processor.stop()
+
     async def add_request(
         self,
         request_id: str,
@@ -263,6 +279,14 @@ class AsyncLLM(EngineClient):
         # Add the request to OutputProcessor (this process).
         self.output_processor.add_request(request, prompt, parent_req, index,
                                           queue)
+
+        # Add the request to BufferResponseProcessor
+        if self.buffer_response:
+            response = BufferedResponse(request_id = request.request_id,
+                                        output = [],
+                                        last_processed_time = request.arrival_time
+                                        )
+            self.buffer_response_processor.add_response(response)
 
         # Add the EngineCoreRequest to EngineCore (separate process).
         await self.engine_core.add_request_async(request)
@@ -371,12 +395,33 @@ class AsyncLLM(EngineClient):
         output_processor = self.output_processor
         log_stats = self.log_stats
         stat_loggers = self.stat_loggers if log_stats else None
+        buffer_response = self.buffer_response
+        buffer_response_processor = self.buffer_response_processor if buffer_response else None
 
         async def output_handler():
             try:
                 while True:
                     # 1) Pull EngineCoreOutputs from the EngineCore.
                     outputs = await engine_core.get_output_async()
+
+                    if buffer_response and not outputs.is_buffered_outputs:
+                        for output in outputs.outputs:
+                            response = BufferedResponse(
+                                request_id=output.request_id,
+                                output=[output],
+                                engine_index=outputs.engine_index,
+                                is_ended=True if output.finish_reason is not None else False
+                            )
+                            buffer_response_processor.add_response(response)
+
+                        if stat_loggers:
+                            AsyncLLM._record_stats(
+                                stat_loggers[outputs.engine_index],
+                                scheduler_stats=outputs.scheduler_stats,
+                                iteration_stats=None,
+                            )
+                        continue
+
                     num_outputs = len(outputs.outputs)
 
                     iteration_stats = IterationStats() if (
@@ -426,6 +471,10 @@ class AsyncLLM(EngineClient):
         """Abort RequestId in OutputProcessor and EngineCore."""
 
         request_ids = self.output_processor.abort_requests((request_id, ))
+
+        if self.buffer_response:
+            self.buffer_response_processor.abort_request(request_id)
+
         await self.engine_core.abort_requests_async(request_ids)
 
         if self.log_requests:
