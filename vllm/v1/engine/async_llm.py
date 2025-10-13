@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from copy import copy
 from typing import Any, Optional, Union
+from asyncio import AbstractEventLoop
 
 import numpy as np
 
@@ -27,8 +28,8 @@ from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.transformers_utils.tokenizer_group import init_tokenizer_from_configs
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Device, cdiv
-from vllm.v1.engine import EngineCoreRequest
-from vllm.v1.engine.core_client import EngineCoreClient
+from vllm.v1.engine import EngineCoreRequest, EngineCoreOutput, EngineCoreOutputs
+from vllm.v1.engine.core_client import EngineCoreClient, MPClient
 from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.output_processor import (OutputProcessor,
                                              RequestOutputCollector)
@@ -283,9 +284,7 @@ class AsyncLLM(EngineClient):
         # Add the request to BufferResponseProcessor
         if self.buffer_response:
             response = BufferedResponse(request_id = request.request_id,
-                                        output = [],
-                                        last_processed_time = request.arrival_time
-                                        )
+                                        last_processed_time = request.arrival_time)
             self.buffer_response_processor.add_response(response)
 
         # Add the EngineCoreRequest to EngineCore (separate process).
@@ -408,7 +407,7 @@ class AsyncLLM(EngineClient):
                         for output in outputs.outputs:
                             response = BufferedResponse(
                                 request_id=output.request_id,
-                                output=[output],
+                                output=output,
                                 engine_index=outputs.engine_index,
                                 is_ended=True if output.finish_reason is not None else False
                             )
@@ -605,3 +604,15 @@ class AsyncLLM(EngineClient):
     @property
     def dead_error(self) -> BaseException:
         return EngineDeadError()
+
+def vllm_process_callback(loop: AbstractEventLoop, engine_core: MPClient, outputs: list[EngineCoreOutput], engine_index : Optional[int] = 0) -> None:
+    """
+    VLLM callback function used in BufferResponseProcessor
+    :param loop: the loop in async_llm to receive buffered responses from BufferResponseProcessor
+    :param engine_core: engine_core in async_llm
+    :param outputs: buffered responses to release
+    :param engine_index: Optional, use the index to release info to specific logger in async_llm
+    :return: None
+    """
+    engine_core_outputs = EngineCoreOutputs(outputs=outputs, engine_index = engine_index, is_buffered_outputs=True)
+    loop.call_soon_threadsafe(engine_core.outputs_queue.put_nowait, engine_core_outputs)
