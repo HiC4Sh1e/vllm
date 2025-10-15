@@ -5,15 +5,20 @@ from rwlock import RWLock
 import time
 import threading
 import queue
+import _queue
 
 SECOND_TO_MS = 1000
-rw_lock = RWLock()
+
+@dataclass
+class GlobalSLORequirement:
+    ttft_slo: Optional[Union[int, float]] = 1000 # ms
+    tpot_slo: Optional[Union[int, float]] = 50  # ms
 
 @dataclass
 class BufferedResponse:
     request_id: str
-    slo_requirement: Optional[dict] = field(default_factory=dict)
-    output: Union[queue.Queue(), Any] = queue.Queue()
+    req_slo_requirement: Optional[Union[GlobalSLORequirement, None]] = None
+    output: Union[queue.Queue, Any] = None
     is_ended: Optional[bool] = False
     have_sent_prefill: Optional[bool] = False
     last_processed_time: Optional[float] = 0.0
@@ -23,6 +28,7 @@ class BufferedResponse:
 class BufferResponseProcessor():
     def __init__(self,
             process_callback: Callable[[Any], Any],
+            global_slo_requirement: Optional[GlobalSLORequirement] = GlobalSLORequirement(),
             engine_num: Optional[int] = 1
         ):
         """
@@ -32,10 +38,10 @@ class BufferResponseProcessor():
         """
         self.process_callback = process_callback
         self.slo_send_factor = 0.95
-        self.default_slo_ms = {"TTFT" : 1000, "ITL" : 50}
+        self.default_slo_requirement = global_slo_requirement
         self.engine_num = engine_num
         self.response_container : Dict[str, BufferedResponse] = {}
-
+        self._rw_lock = RWLock()
         self._running = True
         self._buffer_response_thread = threading.Thread(
             target=self._process_buffered_response,
@@ -49,7 +55,7 @@ class BufferResponseProcessor():
         :param response: class BufferedResponse with request_id, output and slo_requirement(optional)
         :return: None
         """
-        with rw_lock.writer_lock:
+        with self._rw_lock.writer_lock:
             if response.request_id in self.response_container:
                 # update output, engine_index(DP), is_ended for the request in response_container
                 self.response_container[response.request_id].output.put_nowait(response.output)
@@ -57,6 +63,8 @@ class BufferResponseProcessor():
                 self.response_container[response.request_id].is_ended = response.is_ended
             else:
                 # add new request to response_container
+                if not response.req_slo_requirement:
+                    response.req_slo_requirement = self.default_slo_requirement
                 self.response_container[response.request_id] = response
 
     def abort_request(self, request_id: str) -> None:
@@ -65,7 +73,7 @@ class BufferResponseProcessor():
         :param request_id: str
         :return: None
         """
-        with rw_lock.writer_lock:
+        with self._rw_lock.writer_lock:
             if request_id in self.response_container:
                 self.response_container[request_id].is_aborted = True
 
@@ -75,31 +83,23 @@ class BufferResponseProcessor():
         :return: list[Any]
         """
         global SECOND_TO_MS
-        to_send_outputs = []
+        to_send_outputs = {i: [] for i in range(self.engine_num)}
         to_update_response = []
-        with rw_lock.reader_lock:
+        with self._rw_lock.reader_lock:
             for req_id, req_response in self.response_container.items():
-                if req_response.is_aborted:
-                    to_update_response.append((req_response.engine_index, req_id))
-                elif req_response.is_ended:
-                    # if the req is finished or ended, send all the responses
-                    to_update_response.append((req_response.engine_index, req_id))
+                if req_response.is_aborted or req_response.is_ended:
+                    to_update_response.append((req_id, req_response.engine_index))
                 else:
-                    target_slo_str = "ITL" if req_response.have_sent_prefill else "TTFT"
+                    processing_slo = "tpot_slo" if req_response.have_sent_prefill else "ttft_slo"
 
-                    if target_slo_str in req_response.slo_requirement:
-                        target_slo = req_response.slo_requirement[target_slo_str]
-                    else:
-                        target_slo = self.default_slo_ms[target_slo_str]
-
-                    if ((time.time() - req_response.last_processed_time) * SECOND_TO_MS > self.slo_send_factor * target_slo
+                    if (((time.time() - req_response.last_processed_time) * SECOND_TO_MS >
+                            self.slo_send_factor * getattr(req_response.req_slo_requirement, processing_slo))
                             and req_response.output.qsize() > 0):
-                        to_update_response.append((req_response.engine_index, req_id))
+                        to_update_response.append((req_id, req_response.engine_index))
 
-        for response in to_update_response:
-            outputs = self._update_reponse_container_and_get_output(response[1])
-            if outputs:
-                to_send_outputs.extend([(response[0], output) for output in outputs])
+        for id_index_pair in to_update_response:
+            outputs = self._update_response_container_and_get_output(id_index_pair[0])
+            to_send_outputs[id_index_pair[1]].extend(outputs)
         return to_send_outputs
 
     def _process_buffered_response(self) -> None:
@@ -110,34 +110,38 @@ class BufferResponseProcessor():
         while self._running:
             to_send_output = self._slo_checker()
             for engine_index in range(self.engine_num):
-                to_sent_output_by_index = [item[1] for item in to_send_output if item[0] == engine_index]
-                if len(to_sent_output_by_index) > 0:
-                    self.process_callback(outputs = to_sent_output_by_index, engine_index = engine_index)
+                if len(to_send_output[engine_index]) > 0:
+                    self.process_callback(outputs = to_send_output[engine_index], engine_index = engine_index)
             time.sleep(0.001)
 
-    def _update_reponse_container_and_get_output(self, req_id: str):
+    def _update_response_container_and_get_output(self, req_id: str):
         """
         Update the request's info in response_container
         :param req_id: str, request id
         :return: Union None or outputs
         """
-        with rw_lock.writer_lock:
+        with self._rw_lock.writer_lock:
             response = self.response_container[req_id]
-            #remove request once it is aborted or ended
-            result = None
+            result = []
             if response.is_aborted:
                 del self.response_container[req_id]
             elif response.is_ended:
-                result = []
-                while not response.output.empty():
-                    result.append(result)
+                while True:
+                    try:
+                        result.append(response.output.get_nowait())
+                    except (_queue.Empty, queue.Empty):
+                        break
                 del self.response_container[req_id]
             # update whether send the first token
             else:
-                if not response.have_sent_prefill:
-                    self.response_container[req_id].have_sent_prefill = True
-                self.response_container[req_id].last_processed_time = time.time()
-                result = list(response.output.get())
+                # ensure the queue is not empty in _slo_checker
+                try:
+                    result.append(response.output.get_nowait())
+                    if not response.have_sent_prefill:
+                        self.response_container[req_id].have_sent_prefill = True
+                    self.response_container[req_id].last_processed_time = time.time()
+                except (_queue.Empty, queue.Empty):
+                    pass
         return result
 
     def stop(self) -> None:

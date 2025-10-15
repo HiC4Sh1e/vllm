@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Mapping
 from copy import copy
 from typing import Any, Optional, Union
 from asyncio import AbstractEventLoop
+import queue as q
 
 import numpy as np
 
@@ -40,7 +41,7 @@ from vllm.v1.metrics.loggers import (StatLoggerBase, StatLoggerFactory,
                                      setup_default_loggers)
 from vllm.v1.metrics.prometheus import shutdown_prometheus
 from vllm.v1.metrics.stats import IterationStats, SchedulerStats
-from vllm.v1.core.sched.policy.buffer_response_processor import (BufferResponseProcessor, vllm_process_callback,
+from vllm.v1.core.sched.policy.buffer_response_processor import (BufferResponseProcessor, GlobalSLORequirement,
                                                                  BufferedResponse, bind_fixed_params)
 logger = init_logger(__name__)
 
@@ -138,12 +139,18 @@ class AsyncLLM(EngineClient):
         if vllm_config.additional_config:
             logger.debug(f"Setting buffer_response and additional config is {vllm_config.additional_config}")
             self.buffer_response = vllm_config.additional_config.get("buffer_response", False)
+            global_ttft_slo = vllm_config.additional_config.get("ttft_slo")
+            global_tpot_slo = vllm_config.additional_config.get("tpot_slo")
             if self.buffer_response:
                 async_llm_engine_core = self.engine_core
                 decorated_vllm_process_callback = bind_fixed_params(loop=asyncio.get_event_loop(), engine_core=async_llm_engine_core)(
                     vllm_process_callback)
-                self.buffer_response_processor = BufferResponseProcessor(decorated_vllm_process_callback,
-                                                                         vllm_config.parallel_config.data_parallel_size)
+                global_slo = GlobalSLORequirement(ttft_slo=global_ttft_slo if global_ttft_slo else GlobalSLORequirement.ttft_slo,
+                                                  tpot_slo=global_tpot_slo if global_tpot_slo else GlobalSLORequirement.tpot_slo)
+                logger.info(f"using buffer_response: ttft_slo is {global_slo.ttft_slo} tpot_slo is {global_slo.tpot_slo}")
+                self.buffer_response_processor = BufferResponseProcessor(process_callback=decorated_vllm_process_callback,
+                                                                         global_slo_requirement=global_slo,
+                                                                         engine_num=vllm_config.parallel_config.data_parallel_size)
 
         self.output_handler: Optional[asyncio.Task] = None
         try:
@@ -284,6 +291,7 @@ class AsyncLLM(EngineClient):
         # Add the request to BufferResponseProcessor
         if self.buffer_response:
             response = BufferedResponse(request_id = request.request_id,
+                                        output = q.Queue(),
                                         last_processed_time = request.arrival_time)
             self.buffer_response_processor.add_response(response)
 
