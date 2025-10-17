@@ -65,6 +65,7 @@ class EngineCoreRequest(
     # belong to, to cover a race condition where the request is sent before
     # a wave finished notification is received.
     current_wave: int = 0
+    priority: int = 0
 
 
 class EngineCoreEventType(enum.IntEnum):
@@ -154,6 +155,8 @@ class EngineCoreOutputs(
     # In DP case, used to signal that a request was received for an
     # "old" wave, so the next wave needs to be started in other engines.
     start_wave: Optional[int] = None
+
+    is_buffered_outputs: Optional[bool] = False
 
     def __post_init__(self):
         if self.timestamp == 0.0:

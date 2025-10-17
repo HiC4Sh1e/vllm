@@ -22,6 +22,8 @@ from vllm.v1.core.kv_cache_manager import KVCacheManager
 from vllm.v1.core.sched.interface import SchedulerInterface
 from vllm.v1.core.sched.output import (CachedRequestData, NewRequestData,
                                        SchedulerOutput)
+from vllm.v1.core.sched.request_queue import (SchedulingPolicy,
+                                              create_request_queue)
 from vllm.v1.core.sched.utils import check_stop
 from vllm.v1.engine import (EngineCoreEventType, EngineCoreOutput,
                             EngineCoreOutputs)
@@ -94,8 +96,18 @@ class Scheduler(SchedulerInterface):
 
         # req_id -> Request
         self.requests: dict[str, Request] = {}
+        # Scheduling policy
+        if self.scheduler_config.policy == "priority":
+            self.policy = SchedulingPolicy.PRIORITY
+        elif self.scheduler_config.policy == "fcfs":
+            self.policy = SchedulingPolicy.FCFS
+        elif self.scheduler_config.policy == "sjf":
+            self.policy = SchedulingPolicy.SJF
+        else:
+            raise ValueError(
+                f"Unknown scheduling policy: {self.scheduler_config.policy}")
         # Priority queues for requests.
-        self.waiting: deque[Request] = deque()
+        self.waiting = create_request_queue(self.policy)
         self.running: list[Request] = []
 
         # The request IDs that are finished in between the previous and the
@@ -155,6 +167,13 @@ class Scheduler(SchedulerInterface):
             enable_kv_cache_events=self.enable_kv_cache_events,
         )
 
+        self.peak_split = False
+        if vllm_config.additional_config:
+            logger.debug(f"Setting peak split param and additional config is {vllm_config.additional_config}")
+            self.peak_split = vllm_config.additional_config.get("peak_split", False) if self.scheduler_config.chunked_prefill_enabled else False
+            self.peak_split_factor = vllm_config.additional_config.get("peak_split_factor", 0.5)
+            self.chunked_prefill_enabled = self.scheduler_config.chunked_prefill_enabled
+
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
         # There's no "decoding phase" nor "prefill phase" in the scheduler.
@@ -189,6 +208,17 @@ class Scheduler(SchedulerInterface):
         # Spec decode-related.
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
 
+        # peak_split
+        if self.peak_split:
+            if self.peak_split_factor * (len(self.running) + len(self.waiting)) < self.max_num_running_reqs:
+                self.chunked_prefill_enabled = False
+                logger.debug(
+                    f"peak_split is {self.peak_split} and chunked_prefill_enabled is {self.chunked_prefill_enabled}")
+            else:
+                self.chunked_prefill_enabled = True
+                logger.debug(
+                    f"peak_split is {self.peak_split} and chunked_prefill_enabled is {self.chunked_prefill_enabled}")
+
         # For logging.
         scheduled_timestamp = time.monotonic()
 
@@ -199,8 +229,9 @@ class Scheduler(SchedulerInterface):
 
             num_new_tokens = (request.num_tokens_with_spec -
                               request.num_computed_tokens)
-            if (0 < self.scheduler_config.long_prefill_token_threshold <
-                    num_new_tokens):
+            if (0 < 2 * self.scheduler_config.long_prefill_token_threshold <=
+                    num_new_tokens and self.chunked_prefill_enabled):
+                logger.debug(f"using self.chunked_prefill_enabled is {self.chunked_prefill_enabled} and current num_new_tokens is {num_new_tokens}")
                 num_new_tokens = (
                     self.scheduler_config.long_prefill_token_threshold)
             num_new_tokens = min(num_new_tokens, token_budget)
@@ -247,7 +278,15 @@ class Scheduler(SchedulerInterface):
                 if new_blocks is None:
                     # The request cannot be scheduled.
                     # Preempt the lowest-priority request.
-                    preempted_req = self.running.pop()
+                    if self.policy == SchedulingPolicy.PRIORITY:
+                        preempted_req = max(
+                            self.running,
+                            key=lambda r: (r.priority, r.arrival_time),
+                        )
+                        self.running.remove(preempted_req)
+                    else:
+                        preempted_req = self.running.pop()
+
                     self.kv_cache_manager.free(preempted_req)
                     preempted_req.status = RequestStatus.PREEMPTED
                     preempted_req.num_computed_tokens = 0
@@ -255,7 +294,7 @@ class Scheduler(SchedulerInterface):
                         preempted_req.record_event(
                             EngineCoreEventType.PREEMPTED, scheduled_timestamp)
 
-                    self.waiting.appendleft(preempted_req)
+                    self.waiting.prepend_request(preempted_req)
                     preempted_reqs.append(preempted_req)
                     if preempted_req == request:
                         # No more request to preempt.
@@ -311,9 +350,9 @@ class Scheduler(SchedulerInterface):
                 if req.lora_request and req.lora_request.lora_int_id > 0)
             assert len(scheduled_loras) <= self.lora_config.max_loras
 
-        # Use a temporary deque to collect requests that need to be skipped
-        # and put back at the head of the waiting queue later
-        skipped_waiting_requests: deque[Request] = deque()
+        # Use a temporary RequestQueue to collect requests that need to be
+        # skipped and put back at the head of the waiting queue later
+        skipped_waiting_requests = create_request_queue(self.policy)
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
@@ -321,7 +360,7 @@ class Scheduler(SchedulerInterface):
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
-                request = self.waiting[0]
+                request = self.waiting.peek_request()
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -332,8 +371,8 @@ class Scheduler(SchedulerInterface):
                         logger.debug(
                             "%s is still in WAITING_FOR_REMOTE_KVS state.",
                             request.request_id)
-                        self.waiting.popleft()
-                        skipped_waiting_requests.appendleft(request)
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
                         continue
 
                 # Skip request if the structured output request is still waiting
@@ -343,19 +382,18 @@ class Scheduler(SchedulerInterface):
                     if structured_output_req and structured_output_req.grammar:
                         request.status = RequestStatus.WAITING
                     else:
-                        self.waiting.popleft()
-                        skipped_waiting_requests.appendleft(request)
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
                         continue
 
                 # Check that adding the request still respects the max_loras
                 # constraint.
-                if self.lora_config and request.lora_request and (
-                        len(scheduled_loras) == self.lora_config.max_loras
-                        and request.lora_request.lora_int_id
-                        not in scheduled_loras):
+                if (self.lora_config and request.lora_request and
+                    (len(scheduled_loras) == self.lora_config.max_loras and
+                     request.lora_request.lora_int_id not in scheduled_loras)):
                     # Scheduling would exceed max_loras, skip.
-                    self.waiting.popleft()
-                    skipped_waiting_requests.appendleft(request)
+                    self.waiting.pop_request()
+                    skipped_waiting_requests.prepend_request(request)
                     continue
 
                 num_external_computed_tokens = 0
@@ -398,10 +436,13 @@ class Scheduler(SchedulerInterface):
                     # `request.num_prompt_tokens` to consider the resumed
                     # requests, which have output tokens.
                     num_new_tokens = request.num_tokens - num_computed_tokens
-                    if (0 < self.scheduler_config.long_prefill_token_threshold
-                            < num_new_tokens):
+                    if (0 < 2 * self.scheduler_config.long_prefill_token_threshold
+                            <= num_new_tokens and self.chunked_prefill_enabled):
+                        logger.debug(
+                            f"using self.chunked_prefill_enabled is {self.chunked_prefill_enabled} and current num_new_tokens is {num_new_tokens}")
                         num_new_tokens = (
                             self.scheduler_config.long_prefill_token_threshold)
+
                     num_new_tokens = min(num_new_tokens, token_budget)
                     assert num_new_tokens > 0
 
@@ -439,17 +480,19 @@ class Scheduler(SchedulerInterface):
                         num_external_computed_tokens,
                     )
 
-                self.waiting.popleft()
+                # Request was already popped from self.waiting
+                # unless it was re-added above due to new_blocks being None.
+                request = self.waiting.pop_request()
                 if load_kv_async:
                     # If loading async, allocate memory and put request
                     # into the WAITING_FOR_REMOTE_KV state.
-                    skipped_waiting_requests.appendleft(request)
+                    skipped_waiting_requests.prepend_request(request)
                     request.status = RequestStatus.WAITING_FOR_REMOTE_KVS
                     continue
 
                 if request.use_structured_output:
-                    structured_output_request_ids[
-                        request.request_id] = req_index
+                    structured_output_request_ids[request.request_id] = (
+                        req_index)
                 req_index += 1
                 self.running.append(request)
                 if self.log_stats:
@@ -485,7 +528,7 @@ class Scheduler(SchedulerInterface):
 
         # Put back any skipped requests at the head of the waiting queue
         if skipped_waiting_requests:
-            self.waiting.extendleft(skipped_waiting_requests)
+            self.waiting.prepend_requests(skipped_waiting_requests)
 
         # Check if the scheduling constraints are satisfied.
         total_num_scheduled_tokens = sum(num_scheduled_tokens.values())
@@ -869,7 +912,7 @@ class Scheduler(SchedulerInterface):
         return len(self.running), len(self.waiting)
 
     def add_request(self, request: Request) -> None:
-        self.waiting.append(request)
+        self.waiting.add_request(request)
         self.requests[request.request_id] = request
         if self.log_stats:
             request.record_event(EngineCoreEventType.QUEUED)
@@ -890,16 +933,31 @@ class Scheduler(SchedulerInterface):
         else:
             request_ids = set(request_ids)
 
+        running_requests_to_remove = []
+        waiting_requests_to_remove = []
+        valid_requests = []
+
+        # First pass: collect requests to remove from queues
         for req_id in request_ids:
             request = self.requests.get(req_id)
             if request is None:
                 # Invalid request ID.
                 continue
 
+            valid_requests.append(request)
             if request.status == RequestStatus.RUNNING:
-                self.running.remove(request)
+                running_requests_to_remove.append(request)
             else:
-                self.waiting.remove(request)
+                waiting_requests_to_remove.append(request)
+
+        # Remove all requests from queues at once for better efficiency
+        for request in running_requests_to_remove:
+            self.running.remove(request)
+        if waiting_requests_to_remove:
+            self.waiting.remove_requests(waiting_requests_to_remove)
+
+        # Second pass: set status and free requests
+        for request in valid_requests:
             request.status = finished_status
             self._free_request(request)
 
