@@ -4,7 +4,7 @@
 import enum
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Optional
 
 import msgspec
 import torch
@@ -171,6 +171,8 @@ class EngineCoreOutputs(
     # In DP case, used to signal that a request was received for an
     # "old" wave, so the next wave needs to be started in other engines.
     start_wave: int | None = None
+
+    is_buffered_outputs: Optional[bool] = False
 
     def __post_init__(self):
         if self.timestamp == 0.0:
