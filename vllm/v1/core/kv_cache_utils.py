@@ -171,6 +171,8 @@ class KVCacheBlock:
     """KV-cache block metadata."""
     # Block ID, ranging from 0 to num_gpu_blocks - 1.
     block_id: int
+    # block pool id
+    block_pool_id: int = 0
     # Reference count.
     ref_cnt: int = 0
     # The hash key (block hash + group id) of the block, only available

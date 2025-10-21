@@ -31,6 +31,7 @@ class BlockPool:
         num_gpu_blocks: The number of blocks in the pool.
         enable_caching: Whether to enable prefix caching.
         enable_kv_cache_events: Whether to enable kv cache events.
+        pool_id: The id of the BlockPool.
     """
 
     def __init__(
@@ -38,20 +39,21 @@ class BlockPool:
         num_gpu_blocks: int,
         enable_caching: bool,
         enable_kv_cache_events: bool = False,
+        pool_id: int = 0,
     ):
         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
         self.num_gpu_blocks = num_gpu_blocks
         self.enable_caching = enable_caching
         # All kv-cache blocks.
         self.blocks: list[KVCacheBlock] = [
-            KVCacheBlock(idx) for idx in range(num_gpu_blocks)
+            KVCacheBlock(idx, pool_id) for idx in range(num_gpu_blocks)
         ]
         # Free block queue that constructs and manipulates a doubly linked
         # list of free blocks (including eviction candidates when caching is
         # enabled).
         self.free_block_queue = FreeKVCacheBlockQueue(self.blocks)
 
-        # {block_hash: {block ID: block}}. A cached block is
+        # {block_hash: {global block ID: block}}. A cached block is
         # a full block with a block hash that can be used for prefix caching.
         # The cached block may be used by running requests or in the
         # free_block_queue that could potentially be evicted.
@@ -71,6 +73,10 @@ class BlockPool:
 
         self.enable_kv_cache_events = enable_kv_cache_events
         self.kv_event_queue: list[KVCacheEvent] = []
+
+    def _get_global_block_id(self, block: "KVCacheBlock") -> int:
+        # global block ID: block_id + num_gpu_blocks * block_pool_id
+        return block.block_id + self.num_gpu_blocks * block.block_pool_id
 
     def get_cached_block(
             self, block_hash: BlockHash,
@@ -140,8 +146,9 @@ class BlockPool:
             block_hash_with_group_id = make_block_hash_with_group_id(
                 block_hash, kv_cache_group_id)
             blk.block_hash = block_hash_with_group_id
+            global_block_id = self._get_global_block_id(blk)
             self.cached_block_hash_to_block[block_hash_with_group_id][
-                blk.block_id] = blk
+                global_block_id] = blk
             if new_hashes is not None:
                 new_hashes.append(maybe_convert_block_hash(block_hash))
 
@@ -217,7 +224,8 @@ class BlockPool:
             # eviction is not needed
             return False
         block.reset_hash()
-        blocks_by_id.pop(block.block_id, None)
+        global_block_id = self._get_global_block_id(block)
+        blocks_by_id.pop(global_block_id, None)
         if len(blocks_by_id) == 0:
             del self.cached_block_hash_to_block[block_hash]
 
