@@ -5,6 +5,7 @@ from typing import Optional
 
 from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
+from vllm.v1.core.multi_block_pool import MultiBlockPool
 from vllm.v1.core.single_type_kv_cache_manager import (
     CrossAttentionManager, FullAttentionManager, get_manager_for_kv_cache_spec)
 from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheConfig,
@@ -31,8 +32,16 @@ class KVCacheCoordinator(ABC):
         self.max_model_len = max_model_len
         self.enable_caching = enable_caching
 
-        self.block_pool = BlockPool(kv_cache_config.num_blocks, enable_caching,
-                                    enable_kv_cache_events)
+        # todo: dynamic cp enable
+        if cp_world_size > 1:
+            self.block_pool = MultiBlockPool(kv_cache_config.num_blocks,
+                                             enable_caching,
+                                             enable_kv_cache_events,
+                                             cp_world_size)
+        else:
+            self.block_pool = BlockPool(kv_cache_config.num_blocks,
+                                        enable_caching,
+                                        enable_kv_cache_events)
 
         # Needs special handling for find_longest_cache_hit if eagle is enabled
         self.use_eagle = use_eagle
@@ -49,7 +58,8 @@ class KVCacheCoordinator(ABC):
     def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int,
                                    new_computed_blocks: tuple[
                                        list[KVCacheBlock], ...],
-                                   num_encoder_tokens: int) -> int:
+                                   num_encoder_tokens: int,
+                                   pool_ids: list[int] = None) -> int:
         """
         Get the number of blocks needed to be allocated for the request.
 
@@ -61,6 +71,8 @@ class KVCacheCoordinator(ABC):
                 prefix caching.
             num_encoder_tokens: The number of encoder tokens for allocating
                 blocks for cross-attention.
+            pool_ids: The ids of block pool to allocate new blocks (default
+                is None if not use multi block pool and enable dynamic cp).
 
         Returns:
             The number of blocks.
@@ -71,10 +83,11 @@ class KVCacheCoordinator(ABC):
                 # For cross-attention, we issue a single static allocation
                 # of blocks based on the number of encoder input tokens.
                 num_blocks_to_allocate += manager.get_num_blocks_to_allocate(
-                    request_id, num_encoder_tokens, [])
+                    request_id, num_encoder_tokens, [],
+                    pool_ids)
             else:
                 num_blocks_to_allocate += manager.get_num_blocks_to_allocate(
-                    request_id, num_tokens, new_computed_blocks[i])
+                    request_id, num_tokens, new_computed_blocks[i], pool_ids)
         return num_blocks_to_allocate
 
     def save_new_computed_blocks(
@@ -96,7 +109,8 @@ class KVCacheCoordinator(ABC):
             self,
             request_id: str,
             num_tokens: int,
-            num_encoder_tokens: int = 0) -> tuple[list[KVCacheBlock], ...]:
+            num_encoder_tokens: int = 0,
+            pool_ids: list[int] = None) -> tuple[list[KVCacheBlock], ...]:
         """
         Allocate new blocks for the request to give it at least `num_tokens` 
         token slots.
@@ -107,6 +121,8 @@ class KVCacheCoordinator(ABC):
                 tokens that are already allocated).
             num_encoder_tokens: The number of encoder tokens for allocating
                 blocks for cross-attention.
+            pool_ids: The ids of block pool to allocate new blocks (default
+                is None if not use multi block pool and enable dynamic cp).
 
         Returns:
             The new allocated blocks.
@@ -114,7 +130,7 @@ class KVCacheCoordinator(ABC):
         return tuple(
             manager.allocate_new_blocks(
                 request_id, num_encoder_tokens if isinstance(
-                    manager, CrossAttentionManager) else num_tokens)
+                    manager, CrossAttentionManager) else num_tokens, pool_ids)
             for manager in self.single_type_managers)
 
     def cache_blocks(self, request: Request, num_computed_tokens: int) -> None:

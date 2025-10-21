@@ -8,6 +8,7 @@ from vllm.distributed.kv_events import KVCacheEvent
 from vllm.logger import init_logger
 from vllm.v1.core.kv_cache_coordinator import get_kv_cache_coordinator
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
+from vllm.v1.core.multi_block_pool import MultiBlockPool
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
@@ -183,6 +184,8 @@ class KVCacheManager:
         computed_blocks, num_new_computed_tokens = (
             self.coordinator.find_longest_cache_hit(request.block_hashes,
                                                     max_cache_hit_length))
+        # todo: for dynamic cp, computed blocks maybe included in dynamic cp
+        #  ranks(pool ids)
 
         if self.log_stats:
             assert self.prefix_cache_stats is not None
@@ -263,6 +266,7 @@ class KVCacheManager:
             num_computed_tokens + num_new_tokens + num_lookahead_tokens,
             self.max_model_len)
 
+        # todo: add dynamic cp ranks to pool ids
         num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
             request_id=request.request_id,
             num_tokens=num_tokens_need_slot,
@@ -270,7 +274,13 @@ class KVCacheManager:
             num_encoder_tokens=num_encoder_tokens,
         )
 
-        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+        # todo: dynamic cp enable
+        if isinstance(self.block_pool, MultiBlockPool):
+            # todo: add dynamic cp ranks to pool ids
+            num_free_blocks = self.block_pool.get_num_free_blocks_by_pool()
+        else:
+            num_free_blocks = self.block_pool.get_num_free_blocks()
+        if num_blocks_to_allocate > num_free_blocks:
             # Cannot allocate new blocks
             return None
 
@@ -287,6 +297,7 @@ class KVCacheManager:
         self.coordinator.save_new_computed_blocks(request.request_id,
                                                   new_computed_block_list)
 
+        # todo: add dynamic cp ranks to pool ids
         new_blocks = self.coordinator.allocate_new_blocks(
             request.request_id, num_tokens_need_slot, num_encoder_tokens)
 
