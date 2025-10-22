@@ -21,7 +21,7 @@ class MultiBlockPool(BlockPool):
             enable_caching: Whether to enable prefix caching.
             enable_kv_cache_events: Whether to enable kv cache events.
             num_pools: block pool number.
-        """
+    """
 
     def __init__(self,
                  num_gpu_blocks: int,
@@ -168,6 +168,14 @@ class MultiBlockPool(BlockPool):
         return num_free_blocks
 
     def get_num_free_blocks_by_pool(self, pool_ids: list[int] = None):
+        """Get the number of free blocks by pool ids.
+
+        Args:
+            pool_ids: Specify the pool ID to query. If None, query all pools.
+
+        Returns:
+            The number of free blocks.
+        """
         if pool_ids is None:
             return self.get_num_free_blocks()
         num_free_blocks = 0
