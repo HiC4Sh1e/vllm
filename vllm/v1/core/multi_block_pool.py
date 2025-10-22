@@ -27,20 +27,23 @@ class MultiBlockPool(BlockPool):
                  num_gpu_blocks: int,
                  enable_caching: bool,
                  enable_kv_cache_events: bool = False,
-                 num_pools: int = 1, ):
+                 num_pools: int = 1,
+    ):
         self.num_pools = num_pools
         # Create global cached_block_hash_to_block and kv_event_queue.
         # The blocks and free_block_queue is useless in the global pool.
         # Set global pool id to -1.
-        super(MultiBlockPool, self).__init__(num_gpu_blocks, enable_caching, enable_kv_cache_events,
+        super(MultiBlockPool, self).__init__(num_gpu_blocks, enable_caching,
+                                             enable_kv_cache_events,
                                              pool_id=-1)
-        # Change the method of BlockPool, make sure all the operations of cached_block_hash_to_block
-        # and kv_event_queue will call the global object.
+        # Change the method of BlockPool, make sure all the operations of
+        # cached_block_hash_to_block & kv_event_queue will call the global obj.
         BlockPool._maybe_evict_cached_block = self._maybe_evict_cached_block
         # Create local block pools by the `BlockPool` class.
         self.block_pools = []
         for pool_id in range(self.num_pools):
-            self.block_pools.append(BlockPool(num_gpu_blocks, enable_caching, enable_kv_cache_events,
+            self.block_pools.append(BlockPool(num_gpu_blocks, enable_caching,
+                                              enable_kv_cache_events,
                                               pool_id))
 
     def get_cached_block(
@@ -61,16 +64,18 @@ class MultiBlockPool(BlockPool):
     ) -> None:
         # Use the global cached_block_hash_to_block and kv_event_queue.
         # Call the method of parent class directly.
-        return super().cache_full_blocks(request, blocks, num_cached_blocks, num_full_blocks, block_size,
+        return super().cache_full_blocks(request, blocks, num_cached_blocks,
+                                         num_full_blocks, block_size,
                                          kv_cache_group_id)
 
     def get_new_blocks(self, num_blocks: int) -> list[KVCacheBlock]:
         # Allocate block across all pools by default.
-        # Properly handle the relationship between num_blocks and num_pools in advance.
+        # Prepare the relationship between num_blocks and num_pools in advance.
         assert num_blocks % self.num_pools == 0
         blocks = []
         for local_pool in self.block_pools:
-            blocks.extend(local_pool.get_new_blocks(num_blocks // self.num_pools))
+            blocks.extend(
+                local_pool.get_new_blocks(num_blocks // self.num_pools))
         return blocks
 
     def get_new_blocks_by_pool(self, num_blocks: int, pool_ids: list[int]):
@@ -84,15 +89,17 @@ class MultiBlockPool(BlockPool):
         Returns:
             A list of new block.
         """
-        # Properly handle the relationship between num_blocks and num_pools in advance.
+        # Prepare the relationship between num_blocks and num_pools in advance.
         assert num_blocks % len(pool_ids) == 0
         num_blocks_per_pool = num_blocks // len(pool_ids)
         blocks = []
         for pool_id in pool_ids:
             if pool_id >= self.num_pools:
                 raise ValueError(
-                    f"Illegal block pool id {pool_id}. Must be less than {self.num_pools}")
-            blocks.extend(self.block_pools[pool_id].get_new_blocks(num_blocks_per_pool))
+                    f"Illegal block pool id {pool_id}, "
+                    f"must be less than {self.num_pools}")
+            blocks.extend(
+                self.block_pools[pool_id].get_new_blocks(num_blocks_per_pool))
         return blocks
 
     def _maybe_evict_cached_block(self, block: KVCacheBlock) -> bool:
@@ -105,7 +112,8 @@ class MultiBlockPool(BlockPool):
         for blocks_per_group in blocks:
             for block in blocks_per_group:
                 if block.ref_cnt == 0 and not block.is_null:
-                    self.block_pools[block.block_pool_id].free_block_queue.remove(block)
+                    self.block_pools[
+                        block.block_pool_id].free_block_queue.remove(block)
                 block.ref_cnt += 1
 
     def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
@@ -121,7 +129,8 @@ class MultiBlockPool(BlockPool):
         num_used_blocks = 0
         for local_pool in self.block_pools:
             # The null block is always marked as used.
-            num_used_blocks_per_pool = self.num_gpu_blocks - local_pool.get_num_free_blocks() - 1
+            num_used_blocks_per_pool = (
+                    self.num_gpu_blocks - local_pool.get_num_free_blocks() - 1)
             if num_used_blocks_per_pool > 0:
                 num_used_blocks += num_used_blocks_per_pool
         return num_used_blocks
@@ -156,6 +165,18 @@ class MultiBlockPool(BlockPool):
         num_free_blocks = 0
         for local_pool in self.block_pools:
             num_free_blocks += local_pool.get_num_free_blocks()
+        return num_free_blocks
+
+    def get_num_free_blocks_by_pool(self, pool_ids: list[int] = None):
+        if pool_ids is None:
+            return self.get_num_free_blocks()
+        num_free_blocks = 0
+        for pool_id in pool_ids:
+            if pool_id >= self.num_pools:
+                raise ValueError(
+                    f"Illegal block pool id {pool_id}, "
+                    f"must be less than {self.num_pools}")
+            num_free_blocks += self.block_pools[pool_id].get_num_free_blocks()
         return num_free_blocks
 
     def get_usage(self) -> float:
