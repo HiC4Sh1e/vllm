@@ -209,6 +209,7 @@ class KVCacheBlock:
         next_block_id = (self.next_free_block.block_id
                          if self.next_free_block else None)
         return (f"KVCacheBlock(block_id={self.block_id}, "
+                f"block_pool_id={self.block_pool_id}, "
                 f"ref_cnt={self.ref_cnt}, "
                 f"_block_hash={self._block_hash!r}, "
                 f"prev_free_block={prev_block_id}, "

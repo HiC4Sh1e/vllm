@@ -1,5 +1,6 @@
 from collections import defaultdict
-from typing import Optional, Iterable
+from functools import partial
+from typing import Optional, Iterable, Callable
 
 from vllm.distributed.kv_events import AllBlocksCleared, KVCacheEvent
 from vllm.logger import init_logger
@@ -38,6 +39,8 @@ class MultiBlockPool(BlockPool):
                                              pool_id=-1)
         # Change the method of BlockPool, make sure all the operations of
         # cached_block_hash_to_block & kv_event_queue will call the global obj.
+        self.super_maybe_evict_cached_block: Callable[[KVCacheBlock], bool] = (
+            partial(BlockPool._maybe_evict_cached_block, self))
         BlockPool._maybe_evict_cached_block = self._maybe_evict_cached_block
         # Create local block pools by the `BlockPool` class.
         self.block_pools = []
@@ -106,7 +109,7 @@ class MultiBlockPool(BlockPool):
         # This method will be called from the local block pool in block_pools.
         # Use the global cached_block_hash_to_block and kv_event_queue.
         # Call the method of parent class directly.
-        return super()._maybe_evict_cached_block(block)
+        return self.super_maybe_evict_cached_block(block)
 
     def touch(self, blocks: tuple[list[KVCacheBlock], ...]) -> None:
         for blocks_per_group in blocks:
