@@ -80,8 +80,3 @@ class TimeAndLengthScorer(NormalizedScorer):
     def score(self, time: float, length: float) -> float:
         return super().score(time, length)
  
- 
-    print("-" * 50)
-    for t, l in test_cases:
-        s = scorer.score(t, l)
-        print(f"time:{t}, len:{l}, score:{s:.3f}")
