@@ -74,6 +74,11 @@ class Scheduler(SchedulerInterface):
         self.max_num_scheduled_tokens = \
             self.scheduler_config.max_num_batched_tokens
         self.max_model_len = self.scheduler_config.max_model_len
+        self.max_prefill_batch_size = self.scheduler_config.max_prefill_batch_size
+        self.max_prefill_batch_num_token = self.scheduler_config.max_prefill_batch_num_token
+        self.min_prefill_batch_size = self.scheduler_config.min_prefill_batch_size
+        self.prefill_request_batching_timeout_ms = self.scheduler_config.prefill_request_batching_timeout_ms
+        self.scheduler_delay_us = self.scheduler_config.scheduler_delay_us
         self.enable_kv_cache_events = (
             self.kv_events_config is not None
             and self.kv_events_config.enable_kv_cache_events)
@@ -186,6 +191,20 @@ class Scheduler(SchedulerInterface):
 
         self.chunked_prefill_tail_optimization_factor = vllm_config.additional_config.get("chunked_prefill_tail_optimization_factor", 1)
 
+    # 计算一个prefill请求在组batch时：
+    # 1、如果未达到条件，需要等待的时间（单位：ms）；
+    # 2、如果达到条件，可以立即组batch，返回0。
+    def _compute_prefill_request_pending_delay_ms(self, request: Request) -> int:
+        # prefill请求包括：running队列中的chunk-prefill请求、waiting队列中的新请求、waiting队列中preempted请求（由于此判断在 not preempted_reqs 下，所以不用考虑此情况）
+        # prefill 组batch时，对于每个请求的判断逻辑：
+        # 只有当prefill_batch_size没达到min_prefill_batch_size，并且当前请求没有超时，这两个条件下，才会sleep，其他情况均放行
+
+        # 是否sleep？对。ibis中使用的 scheduler_cv_.wait_for(lock, timeout)
+        if (len([req for req in self.waiting if req.num_computed_tokens == 0]) < self.min_prefill_batch_size
+                and (time.time() - request.arrival_time) * 1000 < self.prefill_request_batching_timeout_ms):  # 统一用ms
+            return self.scheduler_config.scheduler_delay_us
+
+        return 0
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
@@ -355,11 +374,34 @@ class Scheduler(SchedulerInterface):
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
+            scheduled_new_reqs_num_token = 0  # 当前正在组的prefill_batch，总token数
             while self.waiting and token_budget > 0:
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
                 request = self.waiting.peek_request()
+
+                logger.warning(
+                    f'===== self.min_prefill_batch_size={self.min_prefill_batch_size}, '
+                    f'self.min_prefill_batch_size={self.min_prefill_batch_size}, '
+                    f'self.prefill_request_batching_timeout_ms={self.prefill_request_batching_timeout_ms}, '
+                    f'self.scheduler_delay_us={self.scheduler_delay_us}')
+                # 达到 max_prefill_batch_size，停止waiting队列调度
+                # 放在异步检查之前，可以用sleep时间掩盖异步处理时间
+                if len(scheduled_new_reqs) > self.scheduler_config.max_prefill_batch_size > 0:
+                    logger.warning(f'===== reach max_prefill_batch_size，break waiting_queue schedule')
+                    break
+                # max_prefill_batch_num_token
+                # 达到 max_prefill_batch_num_token，停止waiting队列调度
+                if scheduled_new_reqs_num_token > self.scheduler_config.max_prefill_batch_num_token > 0:
+                    logger.warning(f'===== reach max_prefill_batch_num_token，break waiting_queue schedule')
+                    break
+                # 判断请求是否可以立即组batch，或者等待固定时间
+                delay_us = self._compute_prefill_request_pending_delay_ms(request)
+                if delay_us > 0:
+                    logger.warning(f'===== prefill request pending delay, curr_time: {time.time()} s')
+                    time.sleep(delay_us / 1_000_000)
+                    continue
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -527,6 +569,7 @@ class Scheduler(SchedulerInterface):
 
                 req_index += 1
                 self.running.append(request)
+                scheduled_new_reqs_num_token += request.num_tokens
                 if self.log_stats:
                     request.record_event(EngineCoreEventType.SCHEDULED,
                                          scheduled_timestamp)
