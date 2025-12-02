@@ -363,6 +363,11 @@ class EngineArgs:
     long_prefill_token_threshold: int = \
         SchedulerConfig.long_prefill_token_threshold
     max_num_seqs: Optional[int] = SchedulerConfig.max_num_seqs
+    max_prefill_batch_size: Optional[int] = SchedulerConfig.max_prefill_batch_size
+    max_prefill_batch_num_token: Optional[int] = SchedulerConfig.max_prefill_batch_num_token
+    min_prefill_batch_size: Optional[int] = SchedulerConfig.min_prefill_batch_size
+    prefill_request_batching_timeout_ms: Optional[int] = SchedulerConfig.prefill_request_batching_timeout_ms
+    scheduler_delay_us: Optional[int] = SchedulerConfig.scheduler_delay_us
     max_logprobs: int = ModelConfig.max_logprobs
     logprobs_mode: LogprobsMode = ModelConfig.logprobs_mode
     disable_log_stats: bool = False
@@ -914,6 +919,16 @@ class EngineArgs:
             **scheduler_kwargs["disable_hybrid_kv_cache_manager"])
         scheduler_group.add_argument("--async-scheduling",
                                      **scheduler_kwargs["async_scheduling"])
+        scheduler_group.add_argument("--max-prefill-batch-size",
+                                     **scheduler_kwargs["max_prefill_batch_size"])
+        scheduler_group.add_argument("--max-prefill-batch-num-token",
+                                     **scheduler_kwargs["max_prefill_batch_num_token"])
+        scheduler_group.add_argument("--min-prefill-batch-size",
+                                     **scheduler_kwargs["min_prefill_batch_size"])
+        scheduler_group.add_argument("--prefill-request-batching-timeout-ms",
+                                     **scheduler_kwargs["prefill_request_batching_timeout_ms"])
+        scheduler_group.add_argument("--scheduler-delay-us",
+                                     **scheduler_kwargs["scheduler_delay_us"])
 
         # vLLM arguments
         vllm_kwargs = get_kwargs(VllmConfig)
@@ -1362,6 +1377,11 @@ class EngineArgs:
             max_num_batched_tokens=self.max_num_batched_tokens,
             max_num_seqs=self.max_num_seqs,
             max_model_len=model_config.max_model_len,
+            max_prefill_batch_size=self.max_prefill_batch_size,
+            max_prefill_batch_num_token=self.max_prefill_batch_num_token,
+            min_prefill_batch_size=self.min_prefill_batch_size,
+            prefill_request_batching_timeout_ms=self.prefill_request_batching_timeout_ms,
+            scheduler_delay_us=self.scheduler_delay_us,
             cuda_graph_sizes=self.cuda_graph_sizes,
             num_lookahead_slots=num_lookahead_slots,
             enable_chunked_prefill=self.enable_chunked_prefill,

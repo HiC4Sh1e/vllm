@@ -74,6 +74,11 @@ class Scheduler(SchedulerInterface):
         self.max_num_scheduled_tokens = \
             self.scheduler_config.max_num_batched_tokens
         self.max_model_len = self.scheduler_config.max_model_len
+        self.max_prefill_batch_size = self.scheduler_config.max_prefill_batch_size
+        self.max_prefill_batch_num_token = self.scheduler_config.max_prefill_batch_num_token
+        self.min_prefill_batch_size = self.scheduler_config.min_prefill_batch_size
+        self.prefill_request_batching_timeout_ms = self.scheduler_config.prefill_request_batching_timeout_ms
+        self.scheduler_delay_us = self.scheduler_config.scheduler_delay_us
         self.enable_kv_cache_events = (
             self.kv_events_config is not None
             and self.kv_events_config.enable_kv_cache_events)
@@ -186,6 +191,13 @@ class Scheduler(SchedulerInterface):
 
         self.chunked_prefill_tail_optimization_factor = vllm_config.additional_config.get("chunked_prefill_tail_optimization_factor", 1)
 
+    def _can_schedule_new_reqs(self, request: Request) -> int:
+        # if prefill requests num (of waiting queue) reaches min_prefill_batch_size, return True, else return False.
+        # True means continue batching, False means stop batching.
+        if (len([req for req in self.waiting if req.num_computed_tokens == 0]) < self.min_prefill_batch_size
+                and (time.time() - request.arrival_time) * 1000 < self.prefill_request_batching_timeout_ms):  # ms
+            return False
+        return True
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
@@ -356,6 +368,16 @@ class Scheduler(SchedulerInterface):
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
             while self.waiting and token_budget > 0:
+                logger.warning(
+                    f'===== self.min_prefill_batch_size={self.min_prefill_batch_size}, '
+                    f'self.prefill_request_batching_timeout_ms={self.prefill_request_batching_timeout_ms}, '
+                    f'self.scheduler_delay_us={self.scheduler_delay_us}'
+                )
+                # self.min_prefill_batch_size > 0 means feature enabled.
+                if self.min_prefill_batch_size > 0 and not self._can_schedule_new_reqs(request):
+                    logger.warning(f'===== prefill request pending delay, curr_time: {time.time()} s')
+                    break
+
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
