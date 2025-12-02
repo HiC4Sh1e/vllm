@@ -367,7 +367,6 @@ class Scheduler(SchedulerInterface):
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
-            scheduled_new_reqs_num_token = 0  # 当前正在组的prefill_batch，总token数
             while self.waiting and token_budget > 0:
                 logger.warning(
                     f'===== self.min_prefill_batch_size={self.min_prefill_batch_size}, '
@@ -550,7 +549,6 @@ class Scheduler(SchedulerInterface):
 
                 req_index += 1
                 self.running.append(request)
-                scheduled_new_reqs_num_token += request.num_tokens
                 if self.log_stats:
                     request.record_event(EngineCoreEventType.SCHEDULED,
                                          scheduled_timestamp)
