@@ -14,6 +14,7 @@ from vllm.attention.backends.abstract import (
     AttentionBackend,
     AttentionType,
     MLAAttentionImpl,
+    DSAAttentionImpl
 )
 from vllm.attention.backends.registry import AttentionBackendEnum
 from vllm.attention.layers.mm_encoder_attention import maybe_get_vit_flash_attn_backend
@@ -981,32 +982,38 @@ class DSAAttention(nn.Module, AttentionLayerBase):
 
     def __init__(
         self,
-        # num_heads: int,
-        # scale: float,
-        # qk_nope_head_dim: int,
-        # qk_rope_head_dim: int,
-        # v_head_dim: int,
-        # q_lora_rank: int | None,
-        # kv_lora_rank: int,
-        # kv_b_proj: ColumnParallelLinear,
-        # cache_config: CacheConfig | None = None,
-        # quant_config: QuantizationConfig | None = None,
-        # prefix: str = "",
-        # use_sparse: bool = False,
-        # indexer: object | None = None,
+        dim: int,
+        n_heads: int,
+        scale: float,
+        n_local_heads: int,
+        o_lora_rank: int,
+        head_dim: int,
+        rope_head_dim: int | None,
+        nope_head_dim: int,
+        n_groups: int,
+        n_local_groups: int,
+        window_size: int,
+        compress_ratio: int,
+        cache_config: CacheConfig | None = None,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
         **extra_impl_args,
     ):
         super().__init__()
-        # self.num_heads = num_heads
-        # self.scale = scale
-        # self.qk_nope_head_dim = qk_nope_head_dim
-        # self.qk_rope_head_dim = qk_rope_head_dim
-        # self.v_head_dim = v_head_dim
-        # self.q_lora_rank = q_lora_rank
-        # self.kv_lora_rank = kv_lora_rank
-        # self.head_size = kv_lora_rank + qk_rope_head_dim
-        # self.layer_name = prefix
-        self.head_size = 256
+        self.dim=dim
+        self.n_heads=n_heads
+        self.scale=scale
+        self.n_local_heads=n_local_heads
+        self.o_lora_rank=o_lora_rank
+        self.head_dim=head_dim 
+        self.rope_head_dim=rope_head_dim
+        self.nope_head_dim=nope_head_dim
+        self.n_groups=n_groups
+        self.n_local_groups=n_local_groups
+        self.window_size = window_size
+        self.compress_ratio=compress_ratio
+                
+        self.head_size = self.head_dim
 
         if cache_config is not None:
             kv_cache_dtype = cache_config.cache_dtype
@@ -1064,7 +1071,6 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             n_local_groups=self.n_local_groups,
             window_size=self.window_size,
             compress_ratio=self.compress_ratio,
-            indexer=indexer,
             **extra_impl_args,
         )
 
@@ -1082,7 +1088,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             )
         ]
 
-        self.use_sparse = use_sparse
+        self.use_sparse = True
 
         # Initialize q/k/v range constants.
         self.q_range = torch.tensor(envs.Q_SCALE_CONSTANT, dtype=torch.float32)
