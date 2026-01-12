@@ -1014,7 +1014,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         self.n_local_groups=n_local_groups
         self.window_size = window_size
         self.compress_ratio=compress_ratio
-                
+        self.layer_name = prefix
         self.head_size = self.head_dim
 
         if cache_config is not None:
