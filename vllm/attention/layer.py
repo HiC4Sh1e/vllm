@@ -1038,7 +1038,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             dtype,
             kv_cache_dtype,
             block_size,
-            use_mla=False,
+            use_mla=True,
             use_sparse=True,
             use_compress=True,
         )

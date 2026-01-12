@@ -1575,7 +1575,7 @@ class ModelConfig:
 
     @property
     def use_mla(self) -> bool:
-        return self.is_deepseek_mla and not envs.VLLM_MLA_DISABLE
+        return True  # zyl tmp modify
 
     @property
     def is_matryoshka(self) -> bool:
