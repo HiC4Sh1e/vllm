@@ -986,6 +986,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         n_heads: int,
         scale: float,
         n_local_heads: int,
+        q_lora_rank: int,
         o_lora_rank: int,
         head_dim: int,
         rope_head_dim: int | None,
@@ -1004,6 +1005,7 @@ class DSAAttention(nn.Module, AttentionLayerBase):
         self.n_heads=n_heads
         self.scale=scale
         self.n_local_heads=n_local_heads
+        self.q_lora_rank=q_lora_rank
         self.o_lora_rank=o_lora_rank
         self.head_dim=head_dim 
         self.rope_head_dim=rope_head_dim
@@ -1058,11 +1060,12 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             cache_config.enable_prefix_caching = False
 
         impl_cls = cast(type[DSAAttentionImpl], self.attn_backend.get_impl_cls())
-        self.impl = impl_cls(
+        self.impl = impl_cls(         
             dim=self.dim,
             n_heads=self.n_heads,
             scale=self.scale,
             n_local_heads=self.n_local_heads,
+            q_lora_rank=self.q_lora_rank,
             o_lora_rank=self.o_lora_rank,
             head_dim=self.head_dim,
             rope_head_dim=self.rope_head_dim,
