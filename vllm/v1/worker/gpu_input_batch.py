@@ -36,6 +36,7 @@ class CachedRequestState:
     generator: torch.Generator | None
 
     block_ids: tuple[list[int], ...]
+    state_id: int
     num_computed_tokens: int
     output_token_ids: list[int]
 

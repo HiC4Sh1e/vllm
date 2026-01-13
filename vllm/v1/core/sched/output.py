@@ -40,6 +40,7 @@ class NewRequestData:
     sampling_params: SamplingParams | None
     pooling_params: PoolingParams | None
     block_ids: tuple[list[int], ...]
+    state_id: int
     num_computed_tokens: int
     lora_request: LoRARequest | None
     prompt_embeds: "torch.Tensor | None" = None
@@ -53,6 +54,7 @@ class NewRequestData:
         request: Request,
         block_ids: tuple[list[int], ...],
         prefill_token_ids: list[int] | None = None,
+        state_id: int = None,
     ) -> "NewRequestData":
         return cls(
             req_id=request.request_id,
@@ -61,6 +63,7 @@ class NewRequestData:
             sampling_params=request.sampling_params,
             pooling_params=request.pooling_params,
             block_ids=block_ids,
+            state_id=state_id,
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
             prompt_embeds=request.prompt_embeds,

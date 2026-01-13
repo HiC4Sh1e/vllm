@@ -80,6 +80,7 @@ class CommonAttentionMetadata:
 
     block_table_tensor: torch.Tensor
     slot_mapping: torch.Tensor
+    state_ids: torch.Tensor | None = None
 
     causal: bool = True
 

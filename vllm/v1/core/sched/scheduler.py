@@ -31,6 +31,7 @@ from vllm.v1.core.encoder_cache_manager import (
     compute_encoder_budget,
 )
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
+from vllm.v1.core.kv_state_manager import KVStateManager
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.sched.interface import SchedulerInterface
 from vllm.v1.core.sched.output import (
@@ -210,6 +211,10 @@ class Scheduler(SchedulerInterface):
             hash_block_size=self.block_size,
             metrics_collector=self.kv_metrics_collector,
         )
+        # Create the KV state manager if needed
+        self.kv_state_manager = KVStateManager(
+            max_num_seqs=self.max_num_running_reqs,
+        ) if 1 else None # model_config is dsk_v4
         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
         self.use_v2_model_runner = envs.VLLM_USE_V2_MODEL_RUNNER
 
@@ -225,12 +230,14 @@ class Scheduler(SchedulerInterface):
         # chunked prefills, prefix caching, speculative decoding,
         # and the "jump decoding" optimization in the future.
 
+        # logger.info(f'============================== schedule =============================')
         scheduled_new_reqs: list[Request] = []
         scheduled_resumed_reqs: list[Request] = []
         scheduled_running_reqs: list[Request] = []
         preempted_reqs: list[Request] = []
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
+        req_to_new_state: dict[str, int] = {}
         num_scheduled_tokens: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
         # Encoder-related.
@@ -589,10 +596,20 @@ class Scheduler(SchedulerInterface):
                     delay_cache_blocks=load_kv_async,
                     num_encoder_tokens=num_encoder_tokens,
                 )
+                new_state = self.kv_state_manager.allocate_slots(
+                    request,
+                ) if self.kv_state_manager is not None else None
 
                 if new_blocks is None:
                     # The request cannot be scheduled.
                     break
+                if self.kv_state_manager is not None and new_state is None:
+                    # The request cannot be scheduled.
+                    break
+                # For connector.update_state_after_alloc,
+                # currently we don't add a state_id in input args,
+                # instead we record and pass it by Request.
+                request.state_id = new_state
 
                 # KVTransfer: the connector uses this info to determine
                 # if a load is needed. Note that
@@ -634,6 +651,7 @@ class Scheduler(SchedulerInterface):
                 req_to_new_blocks[request.request_id] = (
                     self.kv_cache_manager.get_blocks(request.request_id)
                 )
+                req_to_new_state[request.request_id] = new_state
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
@@ -700,7 +718,8 @@ class Scheduler(SchedulerInterface):
         else:
             new_reqs_data = [
                 NewRequestData.from_request(
-                    req, req_to_new_blocks[req.request_id].get_block_ids()
+                    req, req_to_new_blocks[req.request_id].get_block_ids(),
+                    state_id=req_to_new_state[req.request_id],
                 )
                 for req in scheduled_new_reqs
             ]
@@ -1412,6 +1431,7 @@ class Scheduler(SchedulerInterface):
     def _free_blocks(self, request: Request):
         assert request.is_finished()
         self.kv_cache_manager.free(request)
+        self.kv_state_manager.free(request)
         del self.requests[request.request_id]
 
     def get_num_unfinished_requests(self) -> int:

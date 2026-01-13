@@ -44,6 +44,7 @@ class Request:
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
+        state_id: int | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -136,6 +137,7 @@ class Request:
             self.block_hashes = self.get_hash_new_full_blocks()
 
         self.skip_reading_prefix_cache = self.get_skip_reading_prefix_cache()
+        self.state_id = state_id
 
     @classmethod
     def from_engine_core_request(

@@ -1090,6 +1090,10 @@ class DSAAttention(nn.Module, AttentionLayerBase):
                 get_current_vllm_config().parallel_config.pipeline_parallel_size
             )
         ]
+        self.kv_state = [
+            torch.tensor([])
+            # TODO support PP
+        ]
 
         self.use_sparse = True
 
