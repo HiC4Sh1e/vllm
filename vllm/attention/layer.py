@@ -1091,6 +1091,10 @@ class DSAAttention(nn.Module, AttentionLayerBase):
             )
         ]
 
+        self.kv_state = [
+            torch.tensor([])
+        ]
+
         self.use_sparse = True
 
         # Initialize q/k/v range constants.
