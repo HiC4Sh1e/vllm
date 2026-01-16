@@ -148,8 +148,9 @@ class KVCacheCompressManager:
             The KV cache usage (between 0.0 and 1.0).
         """
         block_pool_usage = 0
-        for block_pool in self.block_pool:
-            block_pool_usage += block_pool.get_usage()
+        # FIXME
+        # for block_pool in self.block_pool:
+        #     block_pool_usage += block_pool.get_usage()
         return block_pool_usage / 2
 
     def make_prefix_cache_stats(self) -> PrefixCacheStats | None:

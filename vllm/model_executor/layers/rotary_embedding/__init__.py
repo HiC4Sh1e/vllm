@@ -55,6 +55,7 @@ def get_rope(
 
     rope_parameters = rope_parameters or {}
     base = rope_parameters.get("rope_theta", 10000)
+    print(f'base:{base}')
     scaling_type = rope_parameters.get("rope_type", "default")
     partial_rotary_factor = rope_parameters.get("partial_rotary_factor", 1.0)
 
