@@ -8,7 +8,8 @@ class KVStateManager:
         max_num_seqs: int,
     ):
         self.max_num_seqs = max_num_seqs
-        self.states_pool: set[int] = set(range(max_num_seqs))
+        # same as kv_cache, keep state 0 empty
+        self.states_pool: set[int] = set(range(1, max_num_seqs + 1))
         self.req_to_state_id: dict[str, int] = {}
 
     def allocate_slots(
