@@ -599,20 +599,21 @@ class CompressScheduler(SchedulerInterface):
                     delay_cache_blocks=load_kv_async,
                     num_encoder_tokens=num_encoder_tokens,
                 )
-                new_state = self.kv_state_manager.allocate_slots(
-                    request,
-                ) if self.kv_state_manager is not None else None
-
                 if new_blocks is None:
                     # The request cannot be scheduled.
                     break
-                if self.kv_state_manager is not None and new_state is None:
-                    # The request cannot be scheduled.
-                    break
-                # For connector.update_state_after_alloc,
-                # currently we don't add a state_id in input args,
-                # instead we record and pass it by Request.
-                request.state_id = new_state
+                new_state = None
+                if self.kv_state_manager is not None and request.state_id is None:
+                    new_state = self.kv_state_manager.allocate_slots(
+                        request,
+                    )
+                    if new_state is None:
+                        # The request cannot be scheduled.
+                        break
+                    # For connector.update_state_after_alloc,
+                    # currently we don't add a state_id in input args,
+                    # instead we record and pass it by Request.
+                    request.state_id = new_state
 
                 # KVTransfer: the connector uses this info to determine
                 # if a load is needed. Note that
@@ -655,7 +656,11 @@ class CompressScheduler(SchedulerInterface):
                 req_to_new_blocks[request.request_id] = (
                     self.kv_cache_manager.get_blocks(request.request_id)
                 )
-                req_to_new_state[request.request_id] = new_state
+                # NOTE(zxr): when pd disaggregation, new_state can be None, use request.state_id to replace
+                if new_state is not None:
+                    req_to_new_state[request.request_id] = new_state
+                else:
+                    req_to_new_state[request.request_id] = request.state_id
                 num_scheduled_tokens[request.request_id] = num_new_tokens
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
@@ -1638,7 +1643,8 @@ class CompressScheduler(SchedulerInterface):
             self.failed_recving_kv_req_ids.remove(request.request_id)
         else:
             # Now that the blocks are ready, actually cache them.
-            (block_ids,) = self.kv_cache_manager.get_block_ids(request.request_id)
+            # TODO(zxr): d-node hybrid get two block ids, but out param only receive 1
+            (block_ids, _) = self.kv_cache_manager.get_block_ids(request.request_id)
             # TODO we need to replace with compress ratio
             num_computed_tokens = len(block_ids) * self.block_size * 4
             # Handle the case where num request tokens less than one block.
