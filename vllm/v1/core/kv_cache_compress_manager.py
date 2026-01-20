@@ -128,7 +128,7 @@ class KVCacheCompressManager:
             metrics_collector=self.metrics_collector,
         )
         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
-        self.block_pools = self.coordinator.block_pools
+        self.block_pool = self.coordinator.block_pool
         self.kv_cache_config = kv_cache_config
 
         # Pre-constructed KVCacheBlocks with no blocks, callers should use this
@@ -147,11 +147,7 @@ class KVCacheCompressManager:
         Returns:
             The KV cache usage (between 0.0 and 1.0).
         """
-        block_pool_usage = 0
-        # FIXME
-        # for block_pool in self.block_pool:
-        #     block_pool_usage += block_pool.get_usage()
-        return block_pool_usage / 2
+        return self.block_pool.get_usage()
 
     def make_prefix_cache_stats(self) -> PrefixCacheStats | None:
         """Get (and reset) the prefix cache stats.
@@ -282,26 +278,24 @@ class KVCacheCompressManager:
             self.max_model_len,
         )
 
-        num_blocks_to_allocate_list = self.coordinator.get_num_blocks_to_allocate(
+        num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
             request_id=request.request_id,
             num_tokens=num_tokens_need_slot,
             new_computed_blocks=new_computed_block_list,
             num_encoder_tokens=num_encoder_tokens,
         )
 
-        for num_blocks_to_allocate, block_pool in zip(num_blocks_to_allocate_list, self.block_pools):
-            if num_blocks_to_allocate > block_pool.get_num_free_blocks():
-                # Cannot allocate new blocks
-                return None
+        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+            # Cannot allocate new blocks
+            return None
 
         # Touch the computed blocks to make sure they won't be evicted.
         if self.enable_caching:
-            [block_pool.touch(new_computed_block_list) for block_pool in self.block_pools]
+            self.block_pool.touch(new_computed_block_list)
         else:
-            for new_computed_block_l in new_computed_block_list:
-                assert not any(new_computed_block_l), (
-                    "Computed blocks should be empty when prefix caching is disabled"
-                )
+            assert not any(new_computed_block_list), (
+                "Computed blocks should be empty when prefix caching is disabled"
+            )
 
         if new_computed_block_list is not self.empty_kv_cache_blocks.blocks:
             # Append the new computed blocks to the request blocks until now to
@@ -400,13 +394,13 @@ class KVCacheCompressManager:
         # TODO（lxs）: fix me when prefix cache
         return self.coordinator.get_num_common_prefix_blocks(running_request_id)
 
-    def take_events(self) -> tuple(list[KVCacheEvent]):
+    def take_events(self) -> list[KVCacheEvent]:
         """Take the KV cache events from the block pool.
 
         Returns:
             A list of KV cache events.
         """
-        return tuple([block_pool.take_events() for block_pool in self.block_pools])
+        return self.block_pool.take_events()
 
     def get_blocks(self, request_id: str) -> KVCacheBlocks:
         """Get the blocks of a request."""
