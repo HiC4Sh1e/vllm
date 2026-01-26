@@ -161,6 +161,7 @@ class SchedulerConfig:
 
                 return AsyncScheduler
             from vllm.v1.core.sched.scheduler import Scheduler
+
             return Scheduler
 
         # This warning can be removed once the Scheduler interface is
