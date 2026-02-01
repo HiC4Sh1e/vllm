@@ -25,7 +25,6 @@ class AttentionSelectorConfig(NamedTuple):
     block_size: int | None
     use_mla: bool = False
     has_sink: bool = False
-    use_compress: bool = False
     use_sparse: bool = False
     use_mm_prefix: bool = False
     attn_type: str = AttentionType.DECODER
@@ -38,7 +37,6 @@ class AttentionSelectorConfig(NamedTuple):
             f"block_size={self.block_size}, "
             f"use_mla={self.use_mla}, "
             f"has_sink={self.has_sink}, "
-            f"use_compress={self.use_compress}, "
             f"use_sparse={self.use_sparse}, "
             f"use_mm_prefix={self.use_mm_prefix}, "
             f"attn_type={self.attn_type})"
@@ -52,7 +50,6 @@ def get_attn_backend(
     block_size: int | None,
     use_mla: bool = False,
     has_sink: bool = False,
-    use_compress: bool = False,
     use_sparse: bool = False,
     use_mm_prefix: bool = False,
     attn_type: str | None = None,
@@ -78,7 +75,6 @@ def get_attn_backend(
         block_size=block_size,
         use_mla=use_mla,
         has_sink=has_sink,
-        use_compress=use_compress,
         use_sparse=use_sparse,
         use_mm_prefix=use_mm_prefix,
         attn_type=attn_type or AttentionType.DECODER,
